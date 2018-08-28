@@ -2,7 +2,7 @@ pragma solidity ^0.4.24;
 
 import './SafeMath.sol';
 
-contract ItemAudit {
+contract ItemAuction {
     using SafeMath for uint;
     
     struct Item {
