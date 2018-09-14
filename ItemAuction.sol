@@ -2,10 +2,10 @@ pragma solidity ^0.4.24;
 
 import './SafeMath.sol';
 
-contract ItemAuction {
+contract HashAuction {
     using SafeMath for uint;
 
-    struct Item {
+    struct Hash {
         address owner;
         bytes32 hash;
         bool challengePeriodStarted;
@@ -31,57 +31,75 @@ contract ItemAuction {
         uint claimedRewardOn;
     }
 
-    uint challengeDuration = 1000;
-    uint commitDuration = 1000;
-    uint revealDuration = 1000;
+    uint challengeDuration;
+    uint commitDuration;
+    uint revealDuration;
     uint generateCost;
     uint regenerateCost;
     uint challengeCost;
-    uint voteAmount = 0.02 ether;
+    uint voteAmount;
     uint auctionCut;
     address auctionCutCollector;
-    mapping (address => address[]) public userItems;
-    mapping (address => Item) public items;
+    address owner;
+    mapping (address => address[]) public userHashes;
+    mapping (address => Hash) public hashes;
 
     constructor(
-        address _auctionCutCollector,
+        uint _challengeDuration,
+        uint _commitDuration,
+        uint _revealDuration,
         uint _generateCost,
         uint _regenerateCost,
+        uint _challengeCost,
         uint _auctionCut,
-        uint _challengeCost
+        address _auctionCutCollector,
+        address _owner
     ) public {
-        auctionCutCollector = _auctionCutCollector;
-        auctionCut = _auctionCut;
+        challengeDuration = _challengeDuration;
+        commitDuration = _commitDuration;
+        revealDuration = _revealDuration;
         generateCost = _generateCost;
         regenerateCost = _regenerateCost;
         challengeCost = _challengeCost;
+        auctionCut = _auctionCut;
+        auctionCutCollector = _auctionCutCollector;
+        owner = _owner;
     }
 
-    function generateItem(
+    /**
+    * @dev Generates awesome hash.
+    */
+    function generateHash(
         uint _seed
     ) public payable {
         require(msg.value >= generateCost);
 
-        createItem(_seed);
+        createHash(_seed);
     }
 
-    function regenarateItem(
+    /**
+    * @dev Regenerates hash and deletes the last one for msg.sender.
+    */
+    function regenerateHash(
         uint _seed
     ) public payable {
         require(msg.value >= regenerateCost);
-        require(userItems[msg.sender].length > 0);
+        require(userHashes[msg.sender].length > 0);
 
-        delete userItems[msg.sender][userItems[msg.sender].length - 1];
-        userItems[msg.sender].length--;
+        delete userHashes[msg.sender][userHashes[msg.sender].length - 1];
+        userHashes[msg.sender].length--;
 
-        createItem(_seed);
+        createHash(_seed);
     }
 
-    function createItem(
+    /**
+    * @dev Creates hash and pushes to hashes array.
+    */
+    function createHash(
         uint _seed
     ) private {
-        address key = address(keccak256(abi.encodePacked(msg.sender, userItems[msg.sender].length)));
-        items[key] = Item({
+        address key = address(keccak256(abi.encodePacked(msg.sender, userHashes[msg.sender].length)));
+        hashes[key] = Hash({
             owner: msg.sender,
             hash: keccak256(abi.encodePacked(_seed, msg.sender, msg.data, block.number)),
             challengePeriodStarted: false,
@@ -98,141 +116,203 @@ contract ItemAuction {
             inAuction: false
             });
 
-        userItems[msg.sender].push(key);
+        userHashes[msg.sender].push(key);
     }
 
-    function startChallengePeriod(
-        address _itemAddress
-    ) public {
-        require(items[_itemAddress].owner == msg.sender);
-        require(!items[_itemAddress].challengePeriodStarted);
+    /**
+    * @dev Starts challenge period for specific hash.
+    */
+    function startChallengePeriod(address _hashAddress) public {
+        require(hashes[_hashAddress].owner == msg.sender);
+        require(!hashes[_hashAddress].challengePeriodStarted);
 
-        items[_itemAddress].challengePeriodStarted = true;
+        hashes[_hashAddress].challengePeriodStarted = true;
     }
 
     function challenge(
-        address _itemAddress
+        address _hashAddress
     ) public payable {
-        require(items[_itemAddress].challengePeriodStarted && now < items[_itemAddress].challengePeriodEnd);
+        require(hashes[_hashAddress].challengePeriodStarted && now < hashes[_hashAddress].challengePeriodEnd);
         require(msg.value >= challengeCost);
 
-        items[_itemAddress].commitPeriodEnd = now + commitDuration;
-        items[_itemAddress].revealPeriodEnd = now + commitDuration + revealDuration;
+        hashes[_hashAddress].commitPeriodEnd = now + commitDuration;
+        hashes[_hashAddress].revealPeriodEnd = now + commitDuration + revealDuration;
     }
 
 
     function commitVote(
-        address _itemAddress,
+        address _hashAddress,
         bytes32 _secret
     ) public payable {
-        require(now < items[_itemAddress].commitPeriodEnd);
+        require(now < hashes[_hashAddress].commitPeriodEnd);
         require(msg.value >= voteAmount);
 
-        items[_itemAddress].vote[msg.sender].secretHash = _secret;
-        items[_itemAddress].vote[msg.sender].amount = msg.value;
+        hashes[_hashAddress].vote[msg.sender].secretHash = _secret;
+        hashes[_hashAddress].vote[msg.sender].amount = msg.value;
     }
 
     function revealVote(
-        address _itemAddress,
+        address _hashAddress,
         bool _voteOption,
         bytes32 _seed
     ) public {
-        require(now > items[_itemAddress].commitPeriodEnd && now < items[_itemAddress].revealPeriodEnd);
-        require(items[_itemAddress].vote[msg.sender].secretHash == keccak256(abi.encodePacked(_voteOption, _seed)));
+        require(now > hashes[_hashAddress].commitPeriodEnd && now < hashes[_hashAddress].revealPeriodEnd);
+        require(hashes[_hashAddress].vote[msg.sender].secretHash == keccak256(abi.encodePacked(_voteOption, _seed)));
 
-        items[_itemAddress].vote[msg.sender].option = _voteOption;
-        items[_itemAddress].vote[msg.sender].revealedOn = now;
+        hashes[_hashAddress].vote[msg.sender].option = _voteOption;
+        hashes[_hashAddress].vote[msg.sender].revealedOn = now;
         if (_voteOption) {
-            items[_itemAddress].votesFor.add(items[_itemAddress].vote[msg.sender].amount);
+            hashes[_hashAddress].votesFor.add(hashes[_hashAddress].vote[msg.sender].amount);
         } else {
-            items[_itemAddress].votesAgainst.add(items[_itemAddress].vote[msg.sender].amount);
+            hashes[_hashAddress].votesAgainst.add(hashes[_hashAddress].vote[msg.sender].amount);
         }
-        msg.sender.transfer(items[_itemAddress].vote[msg.sender].amount);
+        msg.sender.transfer(hashes[_hashAddress].vote[msg.sender].amount);
     }
 
     function depositForAuction(
-        address _itemAddress
+        address _hashAddress
     ) public {
-        require((items[_itemAddress].revealPeriodEnd == 0 && items[_itemAddress].challengePeriodEnd < now) || (items[_itemAddress].revealPeriodEnd > now && isVotedFor(_itemAddress)));
-        require(!items[_itemAddress].inAuction);
+        require((hashes[_hashAddress].revealPeriodEnd == 0 && hashes[_hashAddress].challengePeriodEnd < now) || (hashes[_hashAddress].revealPeriodEnd > now && isVotedFor(_hashAddress)));
+        require(!hashes[_hashAddress].inAuction);
 
         auctionCutCollector.transfer(generateCost * auctionCut / 100);
-        items[_itemAddress].depositedForAuction = true;
+        hashes[_hashAddress].depositedForAuction = true;
     }
 
     function startAuction(
-        address _itemAddress,
+        address _hashAddress,
         uint _auctionStartPrice,
         uint _auctionEndPrice,
         uint _auctionDuration
     ) public {
-        require(items[_itemAddress].depositedForAuction);
-        require(!items[_itemAddress].inAuction);
+        require(hashes[_hashAddress].depositedForAuction);
+        require(!hashes[_hashAddress].inAuction);
         require(_auctionDuration >= 5 minutes);
 
-        items[_itemAddress].auctionStartOn = now;
-        items[_itemAddress].auctionStartPrice = _auctionStartPrice;
-        items[_itemAddress].auctionEndPrice = _auctionEndPrice;
-        items[_itemAddress].auctionDuration = _auctionDuration;
-        items[_itemAddress].inAuction = true;
+        hashes[_hashAddress].auctionStartOn = now;
+        hashes[_hashAddress].auctionStartPrice = _auctionStartPrice;
+        hashes[_hashAddress].auctionEndPrice = _auctionEndPrice;
+        hashes[_hashAddress].auctionDuration = _auctionDuration;
+        hashes[_hashAddress].inAuction = true;
     }
 
     function cancelFromAuction(
-        address _itemAddress
+        address _hashAddress
     ) public {
-        require(items[_itemAddress].inAuction);
+        require(hashes[_hashAddress].inAuction);
 
-        items[_itemAddress].inAuction = false;
+        hashes[_hashAddress].inAuction = false;
     }
 
     function buyFromAuction(
-        address _itemAddress,
-        address owner
+        address _hashAddress,
+        address _owner
     ) public payable {
-        require(items[_itemAddress].inAuction);
-        require(msg.value > calculatePrice(_itemAddress));
+        require(hashes[_hashAddress].inAuction);
+        require(msg.value > calculatePrice(_hashAddress));
 
-        for (uint i = 0; i < userItems[owner].length; i++) {
-            if (userItems[owner][i] == _itemAddress) {
-                transfer(owner, msg.sender, _itemAddress);
-                items[_itemAddress].inAuction = false;
+        for (uint i = 0; i < userHashes[_owner].length; i++) {
+            if (userHashes[_owner][i] == _hashAddress) {
+                transfer(_owner, msg.sender, _hashAddress);
+                hashes[_hashAddress].owner.transfer(msg.value);
+                hashes[_hashAddress].owner = msg.sender;
+                hashes[_hashAddress].inAuction = false;
             }
         }
     }
 
     function calculatePrice(
-        address _itemAddress
+        address _hashAddress
     ) public view returns (uint) {
-        require(items[_itemAddress].inAuction);
+        require(hashes[_hashAddress].inAuction);
 
-        if (now >= items[_itemAddress].auctionDuration + items[_itemAddress].auctionStartOn) {
-            return items[_itemAddress].auctionEndPrice;
+        if (now >= hashes[_hashAddress].auctionDuration + hashes[_hashAddress].auctionStartOn) {
+            return hashes[_hashAddress].auctionEndPrice;
         } else {
-            int currentPriceChange = (int(items[_itemAddress].auctionEndPrice) - int(items[_itemAddress].auctionStartPrice)) * int(now - items[_itemAddress].auctionStartOn) / int(items[_itemAddress].auctionDuration);
-            return uint(int(items[_itemAddress].auctionStartPrice) + currentPriceChange);
+            int currentPriceChange = (int(hashes[_hashAddress].auctionEndPrice) - int(hashes[_hashAddress].auctionStartPrice)) * int(now - hashes[_hashAddress].auctionStartOn) / int(hashes[_hashAddress].auctionDuration);
+            return uint(int(hashes[_hashAddress].auctionStartPrice) + currentPriceChange);
         }
     }
 
     function isVotedFor(
-        address _itemAddress
+        address _hashAddress
     ) public view returns (bool) {
-        require(items[_itemAddress].revealPeriodEnd > now);
+        require(hashes[_hashAddress].revealPeriodEnd > now);
 
-        return items[_itemAddress].votesFor > items[_itemAddress].votesAgainst;
+        return hashes[_hashAddress].votesFor > hashes[_hashAddress].votesAgainst;
     }
 
     function transfer(
         address _from,
         address _to,
-        address _itemAddress
+        address _hashAddress
     ) private {
-        for (uint i = 0; i < userItems[_from].length; i++) {
-            if (userItems[_from][i] == _itemAddress) {
-                delete userItems[_from][i];
-                userItems[_from].length--;
+        for (uint i = 0; i < userHashes[_from].length; i++) {
+            if (userHashes[_from][i] == _hashAddress) {
+                delete userHashes[_from][i];
+                userHashes[_from].length--;
             }
         }
 
-        userItems[_to].push(_itemAddress);
+        userHashes[_to].push(_hashAddress);
+    }
+
+    function setChallengeDuration(
+        uint _challengeDuration
+    ) public onlyOwner {
+        challengeDuration = _challengeDuration;
+    }
+
+    function setCommitDuration(
+        uint _commitDuration
+    ) public onlyOwner {
+        commitDuration = _commitDuration;
+    }
+
+    function setRevealDuration(
+        uint _revealDuration
+    ) public onlyOwner {
+        revealDuration = _revealDuration;
+    }
+
+    function setGenerateCost(
+        uint _generateCost
+    ) public onlyOwner {
+        generateCost = _generateCost;
+    }
+
+    function setRegenerateCost(
+        uint _regenerateCost
+    ) public onlyOwner {
+        regenerateCost = _regenerateCost;
+    }
+
+    function setChallengeCost(
+        uint _generateCost
+    ) public onlyOwner {
+        generateCost = _generateCost;
+    }
+
+    function setAuctionCut(
+        uint _auctionCut
+    ) public onlyOwner {
+        auctionCut = _auctionCut;
+    }
+
+    function setAuctionCutCollector(
+        address _auctionCutCollector
+    ) public onlyOwner {
+        auctionCutCollector = _auctionCutCollector;
+    }
+
+    function changeOwner(
+        address _owner
+    ) public onlyOwner {
+        owner = _owner;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
     }
 }
