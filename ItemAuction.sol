@@ -1,7 +1,55 @@
 pragma solidity ^0.4.24;
 
-import './SafeMath.sol';
+/**
+ * @title SafeMath
+ * @dev Math operations with safety checks that throw on error
+ */
+library SafeMath {
 
+    /**
+    * @dev Multiplies two numbers, throws on overflow.
+    */
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        assert(c / a == b);
+        return c;
+    }
+
+    /**
+    * @dev Integer division of two numbers, truncating the quotient.
+    */
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        // assert(b > 0); // Solidity automatically throws when dividing by 0
+        uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+        return c;
+    }
+
+    /**
+    * @dev Substracts two numbers, throws on overflow (i.e. if subtrahend is greater than minuend).
+    */
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    /**
+    * @dev Adds two numbers, throws on overflow.
+    */
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+/**
+ * @title HashAuction
+ * @dev Math operations with safety checks that throw on error
+ */
 contract HashAuction {
     using SafeMath for uint;
 
@@ -55,6 +103,11 @@ contract HashAuction {
         address _auctionCutCollector,
         address _owner
     ) public {
+        require(_auctionCut < 100);
+        require(_commitDuration > 5 minutes);
+        require(_revealDuration > 5 minutes);
+        require(_owner != 0x0);
+
         challengeDuration = _challengeDuration;
         commitDuration = _commitDuration;
         revealDuration = _revealDuration;
@@ -67,7 +120,8 @@ contract HashAuction {
     }
 
     /**
-    * @dev Generates awesome hash.
+    * @dev Generates awesome hash that's truly yours.
+    * @param _seed Seed is a number used for generating random hash
     */
     function generateHash(
         uint _seed
@@ -79,6 +133,7 @@ contract HashAuction {
 
     /**
     * @dev Regenerates hash and deletes the last one for msg.sender.
+    * @param _seed Seed is a number used for regenerating random hash
     */
     function regenerateHash(
         uint _seed
@@ -93,7 +148,8 @@ contract HashAuction {
     }
 
     /**
-    * @dev Creates hash and pushes to hashes array.
+    * @dev Creates and stores hash for msg.sender.
+    * @param _seed Seed is a number used for generating random hash
     */
     function createHash(
         uint _seed
@@ -101,7 +157,7 @@ contract HashAuction {
         address key = address(keccak256(abi.encodePacked(msg.sender, userHashes[msg.sender].length)));
         hashes[key] = Hash({
             owner: msg.sender,
-            hash: keccak256(abi.encodePacked(_seed, msg.sender, msg.data, block.number)),
+            hash: generateRandomHash(_seed),
             challengePeriodStarted: false,
             challengePeriodEnd: 0,
             commitPeriodEnd: 0,
@@ -120,44 +176,72 @@ contract HashAuction {
     }
 
     /**
+    * @dev Generates random hash
+    * @param _seed Seed is a number used for generating random hash
+    */
+    function generateRandomHash(
+        uint _seed
+    ) public view returns (bytes32) {
+        return keccak256(abi.encodePacked(_seed, msg.sender, msg.data, block.number));
+    }
+
+    /**
     * @dev Starts challenge period for specific hash.
+    * @param _hashAddress is address of hash
     */
     function startChallengePeriod(address _hashAddress) public {
         require(hashes[_hashAddress].owner == msg.sender);
         require(!hashes[_hashAddress].challengePeriodStarted);
 
         hashes[_hashAddress].challengePeriodStarted = true;
+        hashes[_hashAddress].challengePeriodEnd = now + challengeDuration;
     }
 
+    /**
+    * @dev Challenges a specific hash.
+    * @param _hashAddress Address of hash
+    */
     function challenge(
         address _hashAddress
     ) public payable {
         require(hashes[_hashAddress].challengePeriodStarted && now < hashes[_hashAddress].challengePeriodEnd);
+        require(hashes[_hashAddress].commitPeriodEnd == 0);
         require(msg.value >= challengeCost);
 
         hashes[_hashAddress].commitPeriodEnd = now + commitDuration;
         hashes[_hashAddress].revealPeriodEnd = now + commitDuration + revealDuration;
     }
 
-
+    /**
+    * @dev Challenges a specific hash.
+    * @param _hashAddress Address of hash
+    * @param _secretHash Encrypted vote option with salt. sha3(voteOption, salt)
+    */
     function commitVote(
         address _hashAddress,
-        bytes32 _secret
+        bytes32 _secretHash
     ) public payable {
         require(now < hashes[_hashAddress].commitPeriodEnd);
         require(msg.value >= voteAmount);
 
-        hashes[_hashAddress].vote[msg.sender].secretHash = _secret;
+        hashes[_hashAddress].vote[msg.sender].secretHash = _secretHash;
         hashes[_hashAddress].vote[msg.sender].amount = msg.value;
     }
 
+    /**
+    * @dev Reveals previously committed vote
+    * @param _hashAddress Address of hash
+    * @param _voteOption Vote option voter previously voted with
+    * @param _salt Salt with which user previously encrypted his vote option
+    */
     function revealVote(
         address _hashAddress,
         bool _voteOption,
-        bytes32 _seed
+        bytes32 _salt
     ) public {
         require(now > hashes[_hashAddress].commitPeriodEnd && now < hashes[_hashAddress].revealPeriodEnd);
-        require(hashes[_hashAddress].vote[msg.sender].secretHash == keccak256(abi.encodePacked(_voteOption, _seed)));
+        require(hashes[_hashAddress].vote[msg.sender].revealedOn == 0);
+        require(hashes[_hashAddress].vote[msg.sender].secretHash == keccak256(abi.encodePacked(_voteOption, _salt)));
 
         hashes[_hashAddress].vote[msg.sender].option = _voteOption;
         hashes[_hashAddress].vote[msg.sender].revealedOn = now;
@@ -169,15 +253,28 @@ contract HashAuction {
         msg.sender.transfer(hashes[_hashAddress].vote[msg.sender].amount);
     }
 
+    /**
+    * @dev Deposits a hash for auction. Callable only for hashes that passed challenge period successfully
+    * @param _hashAddress Address of hash
+    */
     function depositForAuction(
         address _hashAddress
     ) public {
-        require((hashes[_hashAddress].revealPeriodEnd == 0 && hashes[_hashAddress].challengePeriodEnd < now) || (hashes[_hashAddress].revealPeriodEnd > now && isVotedFor(_hashAddress)));
+        require((hashes[_hashAddress].revealPeriodEnd == 0 && hashes[_hashAddress].challengePeriodEnd < now) ||
+            (hashes[_hashAddress].revealPeriodEnd > now && isVotedFor(_hashAddress)));
         require(!hashes[_hashAddress].inAuction);
 
         auctionCutCollector.transfer(generateCost * auctionCut / 100);
         hashes[_hashAddress].depositedForAuction = true;
     }
+
+    /**
+    * @dev Starts auction for specific hash
+    * @param _hashAddress Address of hash
+    * @param _auctionStartPrice Start price of hash
+    * @param _auctionEndPrice End price of hash
+    * @param _auctionDuration Duration of auction
+    */
 
     function startAuction(
         address _hashAddress,
@@ -196,6 +293,10 @@ contract HashAuction {
         hashes[_hashAddress].inAuction = true;
     }
 
+    /**
+    * @dev Cancels auction for specific hash
+    * @param _hashAddress Address of hash
+    */
     function cancelFromAuction(
         address _hashAddress
     ) public {
@@ -204,24 +305,31 @@ contract HashAuction {
         hashes[_hashAddress].inAuction = false;
     }
 
-    function buyFromAuction(
-        address _hashAddress,
-        address _owner
-    ) public payable {
-        require(hashes[_hashAddress].inAuction);
-        require(msg.value > calculatePrice(_hashAddress));
+    /**
+    * @dev Buys hash from auction
+    * @param _owner Address of owner
+    * @param _index Index of
+    */
 
-        for (uint i = 0; i < userHashes[_owner].length; i++) {
-            if (userHashes[_owner][i] == _hashAddress) {
-                transfer(_owner, msg.sender, _hashAddress);
-                hashes[_hashAddress].owner.transfer(msg.value);
-                hashes[_hashAddress].owner = msg.sender;
-                hashes[_hashAddress].inAuction = false;
-            }
-        }
+    function buyFromAuction(
+        address _owner,
+        uint _index
+    ) public payable {
+        address hashAddress = userHashes[_owner][_index];
+        require(hashes[hashAddress].inAuction);
+        require(msg.value > calculatePrice(userHashes[_owner][_index]));
+
+        transfer(_owner, msg.sender, _index);
+        hashes[hashAddress].owner.transfer(msg.value);
+        hashes[hashAddress].owner = msg.sender;
+        hashes[hashAddress].inAuction = false;
     }
 
-    function calculatePrice(
+    /**
+    * @dev Calculates price of hash
+    * @param _owner Address of owner
+    */
+function calculatePrice(
         address _hashAddress
     ) public view returns (uint) {
         require(hashes[_hashAddress].inAuction);
@@ -245,57 +353,19 @@ contract HashAuction {
     function transfer(
         address _from,
         address _to,
-        address _hashAddress
+        uint _index
     ) private {
-        for (uint i = 0; i < userHashes[_from].length; i++) {
-            if (userHashes[_from][i] == _hashAddress) {
-                delete userHashes[_from][i];
-                userHashes[_from].length--;
-            }
-        }
+        address hashAddress = userHashes[_from][_index];
+        userHashes[_from][_index] = userHashes[_from][userHashes[_from].length - 1];
+        userHashes[_from].length--;
 
-        userHashes[_to].push(_hashAddress);
-    }
-
-    function setChallengeDuration(
-        uint _challengeDuration
-    ) public onlyOwner {
-        challengeDuration = _challengeDuration;
-    }
-
-    function setCommitDuration(
-        uint _commitDuration
-    ) public onlyOwner {
-        commitDuration = _commitDuration;
-    }
-
-    function setRevealDuration(
-        uint _revealDuration
-    ) public onlyOwner {
-        revealDuration = _revealDuration;
-    }
-
-    function setGenerateCost(
-        uint _generateCost
-    ) public onlyOwner {
-        generateCost = _generateCost;
-    }
-
-    function setRegenerateCost(
-        uint _regenerateCost
-    ) public onlyOwner {
-        regenerateCost = _regenerateCost;
-    }
-
-    function setChallengeCost(
-        uint _generateCost
-    ) public onlyOwner {
-        generateCost = _generateCost;
+        userHashes[_to].push(hashAddress);
     }
 
     function setAuctionCut(
         uint _auctionCut
     ) public onlyOwner {
+        require(_auctionCut < 100);
         auctionCut = _auctionCut;
     }
 
